@@ -1,0 +1,50 @@
+---
+- name: Bootstrapping/Updating the system
+  block:
+  - name: Preparing chroot environment on not bootstrapped systems
+    command:
+      warn: no
+      argv: "{{ [ 'mount', item[0], root_target + item[1], item[2] ] | flatten }}"
+    changed_when: no
+    loop:
+      - [ "proc"            ,"/proc"            , [ "-t", "proc",     "-o", "nosuid,noexec,nodev"                ] ]
+      - [ "sys"             ,"/sys"             , [ "-t", "sysfs",    "-o", "nosuid,noexec,nodev,ro"             ] ]
+      - [ "udev"            ,"/dev"             , [ "-t", "devtmpfs", "-o", "mode=0755,nosuid"                   ] ]
+      - [ "devpts"          ,"/dev/pts"         , [ "-t", "devpts",   "-o", "mode=0620,gid=5,nosuid,noexec"      ] ]
+      - [ "shm"             ,"/dev/shm"         , [ "-t", "tmpfs",    "-o", "mode=1777,nosuid,nodev"             ] ]
+      - [ "tmp"             ,"/tmp"             , [ "-t", "tmpfs",    "-o", "mode=1777,strictatime,nodev,nosuid" ] ]
+      - [ "/run"            ,"/run"             , [ "--bind"                                                     ] ]
+      - [ "/etc/resolv.conf","/etc/resolv.conf" , [ "--bind"                                                     ] ]
+    when: not ansible_local.bootstrapped | default(false)
+
+  - name: Installing GRUB on marked partitions
+    command: "{% if not ansible_local.bootstrapped | default(false) %}chroot {{ root_target }} {% endif %}grub-install --recheck {{ item }}"
+    environment:
+      - ZPOOL_VDEV_NAME_PATH: "1"
+    loop: "{{ ansible_local.disk_layout | json_query(\"[?flags=='bios_grub'].device\") }}"
+
+  - name: Creating grub config
+    command: "{% if not ansible_local.bootstrapped | default(false) %}chroot {{ root_target }} {% endif %}grub-mkconfig -o /boot/grub/grub.cfg {{ item }}"
+    environment:
+      - ZPOOL_VDEV_NAME_PATH: "1"
+    loop: "{{ ansible_local.disk_layout | json_query(\"[?flags=='bios_grub'].device\") }}"
+
+  always:
+  - name: Unmounting chroot environment on not bootstrapped systems
+    command:
+      warn: no
+      argv:
+        - umount
+        - -l
+        - "{{ root_target + item }}"
+    changed_when: no
+    loop:
+      - "/dev/pts"
+      - "/dev/shm"
+      - "/proc"
+      - "/sys"
+      - "/dev"
+      - "/tmp"
+      - "/run"
+      - "/etc/resolv.conf"
+    when: item[1] and not ansible_local.bootstrapped | default(false)
